@@ -84,6 +84,14 @@ PFM_RF_REPEAT_SUPPORT_ENABLE="${PFM_RF_REPEAT_SUPPORT_ENABLE:-0}"
 PFM_RF_REPEAT_MIN_FRAMES="${PFM_RF_REPEAT_MIN_FRAMES:-30}"
 PFM_RF_REPEAT_OUTDIR_NAME="${PFM_RF_REPEAT_OUTDIR_NAME:-RepeatAssignment}"
 PFM_RF_REPEAT_KEEP_RUN_ARTIFACTS="${PFM_RF_REPEAT_KEEP_RUN_ARTIFACTS:-0}"
+PFM_STRIPE_REMOVAL_ENABLE="${PFM_STRIPE_REMOVAL_ENABLE:-0}"
+PFM_STRIPE_COMPONENT_THRESH="${PFM_STRIPE_COMPONENT_THRESH:-0.4}"
+PFM_STRIPE_VARIANCE_EXPLAINED="${PFM_STRIPE_VARIANCE_EXPLAINED:-1}"
+PFM_STRIPE_ROI_CIFTI="${PFM_STRIPE_ROI_CIFTI:-${PFM_RESOURCES_ROOT}/Face_dependence_regression_ROIs.dscalar.nii}"
+PFM_LEFT_MIDTHICKNESS="${PFM_LEFT_MIDTHICKNESS:-}"
+PFM_RIGHT_MIDTHICKNESS="${PFM_RIGHT_MIDTHICKNESS:-}"
+PFM_LEFT_PIAL="${PFM_LEFT_PIAL:-}"
+PFM_RIGHT_PIAL="${PFM_RIGHT_PIAL:-}"
 PFM_RF_SUBCORT_REGRESS_ENABLE="${PFM_RF_SUBCORT_REGRESS_ENABLE:-1}"
 PFM_RF_SUBCORT_REGRESS_DISTANCE_MM="${PFM_RF_SUBCORT_REGRESS_DISTANCE_MM:-20}"
 PFM_RF_BRAIN_STRUCTURES_CSV="${PFM_RF_BRAIN_STRUCTURES_CSV:-}"
@@ -240,8 +248,8 @@ if [[ -z "$PFM_INPUT_CIFTI" ]]; then
   fi
 fi
 
-L_MID="${SubjectDir}/anat/T1w/fsaverage_LR32k/${Subject}.L.midthickness.32k_fs_LR.surf.gii"
-R_MID="${SubjectDir}/anat/T1w/fsaverage_LR32k/${Subject}.R.midthickness.32k_fs_LR.surf.gii"
+L_MID="${PFM_LEFT_MIDTHICKNESS:-${SubjectDir}/anat/T1w/fsaverage_LR32k/${Subject}.L.midthickness.32k_fs_LR.surf.gii}"
+R_MID="${PFM_RIGHT_MIDTHICKNESS:-${SubjectDir}/anat/T1w/fsaverage_LR32k/${Subject}.R.midthickness.32k_fs_LR.surf.gii}"
 L_SPHERE="${SubjectDir}/anat/MNINonLinear/fsaverage_LR32k/${Subject}.L.sphere.32k_fs_LR.surf.gii"
 R_SPHERE="${SubjectDir}/anat/MNINonLinear/fsaverage_LR32k/${Subject}.R.sphere.32k_fs_LR.surf.gii"
 
@@ -250,7 +258,7 @@ echo "[pfm] input CIFTI=${PFM_INPUT_CIFTI}"
 echo "[pfm] output dir=${PFM_OUTDIR}"
 
 [[ -f "$PFM_INPUT_CIFTI" ]] || { echo "ERROR: missing input CIFTI: $PFM_INPUT_CIFTI"; exit 2; }
-[[ -f "$L_MID" && -f "$R_MID" ]] || { echo "ERROR: missing midthickness surfaces"; exit 2; }
+[[ -f "$L_MID" && -f "$R_MID" ]] || { echo "ERROR: missing midthickness surfaces: $L_MID $R_MID"; exit 2; }
 command -v wb_command >/dev/null 2>&1 || { echo "ERROR: wb_command not found"; exit 2; }
 if [[ "$PFM_STRATEGY" == "ridgepfm" && "$PFM_RF_MULTINETWORK_EXPERIMENTAL_ENABLE" == "1" && "$PFM_AREAL_ENABLE" != "1" ]]; then
   echo "ERROR: PFM_RF_MULTINETWORK_EXPERIMENTAL_ENABLE=1 requires PFM_AREAL_ENABLE=1"
@@ -290,6 +298,24 @@ if [[ "$PFM_STRATEGY" == "ridgepfm" ]]; then
       --euclidean-override-mm "$PFM_DISTANCE_EUCLIDEAN_OVERRIDE_MM"
   fi
   [[ -f "$PFM_DISTANCE_MATRIX" ]] || { echo "ERROR: distance matrix not found: $PFM_DISTANCE_MATRIX"; exit 2; }
+fi
+
+if [[ "${PFM_STRIPE_REMOVAL_ENABLE}" == "1" ]]; then
+  L_PIAL="${PFM_LEFT_PIAL:-${SubjectDir}/anat/T1w/fsaverage_LR32k/${Subject}.L.pial.32k_fs_LR.surf.gii}"
+  R_PIAL="${PFM_RIGHT_PIAL:-${SubjectDir}/anat/T1w/fsaverage_LR32k/${Subject}.R.pial.32k_fs_LR.surf.gii}"
+  [[ -f "$L_PIAL" && -f "$R_PIAL" ]] || { echo "ERROR: missing pial surfaces for stripe removal: $L_PIAL $R_PIAL"; exit 2; }
+  IN_BASENAME="$(basename "$PFM_INPUT_CIFTI" .dtseries.nii)"
+  PFM_INPUT_CIFTI_STRIPE="${PREP_DIR}/${IN_BASENAME}+StripeRegression.dtseries.nii"
+  echo "[pfm] running motor stripe (face dependence) regression -> ${PFM_INPUT_CIFTI_STRIPE}"
+  "$PFM_PYTHON" "$MEDIR/lib/pfm_stripe_removal.py" \
+    --in-cifti "$PFM_INPUT_CIFTI" \
+    --out-cifti "$PFM_INPUT_CIFTI_STRIPE" \
+    --left-pial "$L_PIAL" \
+    --right-pial "$R_PIAL" \
+    --roi-cifti "$PFM_STRIPE_ROI_CIFTI" \
+    --component-thresh "$PFM_STRIPE_COMPONENT_THRESH" \
+    --variance-explained "$PFM_STRIPE_VARIANCE_EXPLAINED"
+  PFM_INPUT_CIFTI="$PFM_INPUT_CIFTI_STRIPE"
 fi
 
 cv_prepared_input=""

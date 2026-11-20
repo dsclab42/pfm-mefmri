@@ -497,6 +497,13 @@ PFM_RF_REPEAT_SUPPORT_ENABLE=0    # independently map eligible runs and summariz
 PFM_RF_REPEAT_MIN_FRAMES=30       # exclude scans with fewer retained frames; fewer than two scans => not estimable
 PFM_RF_REPEAT_OUTDIR_NAME="RepeatAssignment"
 PFM_RF_REPEAT_KEEP_RUN_ARTIFACTS=0 # combined per-scan dlabel is retained; discard redundant temporary run products
+PFM_LEFT_MIDTHICKNESS=""          # optional midthickness surfaces; empty uses anat/T1w/fsaverage_LR32k/<subject>.{L,R}.midthickness.32k_fs_LR.surf.gii
+PFM_RIGHT_MIDTHICKNESS=""
+PFM_LEFT_PIAL=""                  # optional pial surfaces for stripe removal; empty uses anat/T1w/fsaverage_LR32k/<subject>.{L,R}.pial.32k_fs_LR.surf.gii
+PFM_RIGHT_PIAL=""
+PFM_STRIPE_REMOVAL_ENABLE=0       # regress motor stripe (face dependence) components before any other PFM preparation
+PFM_STRIPE_COMPONENT_THRESH=0.4   # minimum |r| between a component's FC and the pial normal
+PFM_STRIPE_VARIANCE_EXPLAINED=1   # minimum percent variance a regressed component explains
 PFM_RF_SUBCORT_REGRESS_ENABLE=1   # regress nearby cortical signal from subcortex before PFM estimation
 PFM_RF_SUBCORT_REGRESS_DISTANCE_MM=20
 PFM_RF_BRAIN_STRUCTURES_CSV=""    # empty maps every CIFTI grayordinate, including structures without spatial priors
