@@ -3,6 +3,9 @@
 
 Implements the core workflow from PFM-InfoMap `pfm_wrapper.m`:
 1) build density-thresholded weighted graphs from FC with local-edge removal
+   (block-wise by default: only each node's strongest edges are kept, so the full
+   node x node FC matrix is never held in memory; --graph-builder dense keeps the
+   original full-matrix construction)
 2) run InfoMap per graph density
 3) collect memberships into Bipartite_PhysicalCommunities.dtseries.nii
 4) remove communities smaller than 10 vertices per density
@@ -87,12 +90,16 @@ def _subset_from_h5_dataset(dset, good: np.ndarray, chunk_rows: int = 512) -> np
         return out
 
 
-def load_distance_subset(path: Path, good: np.ndarray, n_gray: int) -> np.ndarray:
+def load_distance_subset(path: Path, good: np.ndarray, n_gray: int, keep_integer_dtype: bool = False) -> np.ndarray:
     if path.suffix.lower() == ".npy":
         d = np.load(path, mmap_mode="r")
         if d.shape[0] < n_gray or d.shape[1] < n_gray:
             raise RuntimeError(f"Distance matrix shape {d.shape} smaller than grayordinates {n_gray}")
-        return np.asarray(d[np.ix_(good, good)], dtype=np.float32)
+        # A uint8 matrix kept as uint8 is a quarter of the float32 copy; thresholding gives the same result.
+        dtype = d.dtype if keep_integer_dtype and np.issubdtype(d.dtype, np.integer) else np.float32
+        if good.size == d.shape[0] == d.shape[1] and np.array_equal(good, np.arange(good.size)):
+            return np.array(d, dtype=dtype)
+        return np.asarray(d[np.ix_(good, good)], dtype=dtype)
 
     if path.suffix.lower() == ".mat":
         # Try scipy loadmat first (v7 and earlier).
@@ -177,6 +184,107 @@ def build_connection_matrix(fc: np.ndarray, density: float) -> np.ndarray:
     return conn
 
 
+def top_edges_blockwise(
+    X: np.ndarray,
+    Dg: np.ndarray,
+    min_distance: float,
+    n_time: int,
+    k_max: int,
+    block_cols: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Each node's k_max strongest FC edges, strongest first, without the full FC matrix.
+
+    Equivalent to sorting every column of the masked dense FC matrix (as
+    build_connection_matrix does) and keeping the first k_max entries: the FC of
+    block_cols nodes against all nodes is computed, masked and ranked at a time.
+    Returns (top_idx, top_val, active); active is False for nodes whose masked FC
+    is all zero, which pick no edges.
+    """
+    n = X.shape[0]
+    k_max = max(1, min(int(k_max), n))
+    denom = max(n_time - 1, 1)
+    top_idx = np.zeros((n, k_max), dtype=np.int32)
+    top_val = np.zeros((n, k_max), dtype=np.float32)
+    active = np.zeros((n,), dtype=bool)
+    XT = np.ascontiguousarray(X.T)
+
+    for c0 in range(0, n, int(block_cols)):
+        c1 = min(c0 + int(block_cols), n)
+        # blk[j, r] = fc[r, c0 + j]
+        blk = (X[c0:c1] @ XT) / denom
+        j = np.arange(c1 - c0)
+        blk[j, c0 + j] = 0.0
+        blk[Dg[:, c0:c1].T <= float(min_distance)] = 0.0
+        np.nan_to_num(blk, copy=False)
+        active[c0:c1] = blk.any(axis=1)
+
+        if k_max < n:
+            idx = np.argpartition(blk, n - k_max, axis=1)[:, n - k_max :]
+        else:
+            idx = np.tile(np.arange(n), (c1 - c0, 1))
+        val = np.take_along_axis(blk, idx, axis=1)
+        order = np.argsort(-val, axis=1)
+        idx = np.take_along_axis(idx, order, axis=1)
+        val = np.take_along_axis(val, order, axis=1)
+
+        # Fewer than k_max positive edges: zero-valued (masked) entries are picked too.
+        # Rank those columns exactly as the dense builder does so the same ties are chosen.
+        for jj in np.where(val[:, -1] <= 0)[0]:
+            full = np.argsort(blk[jj])[::-1][:k_max]
+            idx[jj] = full
+            val[jj] = blk[jj, full]
+
+        top_idx[c0:c1] = idx
+        top_val[c0:c1] = val
+    return top_idx, top_val, active
+
+
+def edges_from_top(
+    top_idx: np.ndarray,
+    top_val: np.ndarray,
+    active: np.ndarray,
+    density: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Upper-triangle edge list (1-based x < y, weight) for one density.
+
+    An edge is kept if either node picked the other among its top k, as in
+    build_connection_matrix. Edges are ordered as write_pajek orders them.
+    """
+    n = top_idx.shape[0]
+    k = int(np.ceil(n * density))
+    k = max(1, min(k, n, top_idx.shape[1]))
+    cols = np.where(active)[0]
+    r = top_idx[cols, :k].ravel().astype(np.int64)
+    c = np.repeat(cols.astype(np.int64), k)
+    v = top_val[cols, :k].ravel()
+
+    # Picks already in upper-triangle orientation (row < col) first, so their weight is the one kept.
+    upper = r < c
+    lower = r > c
+    key = np.concatenate([r[upper] * n + c[upper], c[lower] * n + r[lower]])
+    v = np.concatenate([v[upper], v[lower]])
+    key, first = np.unique(key, return_index=True)
+    return key // n + 1, key % n + 1, v[first]
+
+
+def write_pajek_edges(
+    path: Path,
+    n: int,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    chunk: int = 1_000_000,
+) -> int:
+    with path.open("w", encoding="utf-8") as f:
+        f.write(f"*Vertices {n}\n")
+        f.writelines(f'{i} "{i}"\n' for i in range(1, n + 1))
+        f.write(f"*Edges {len(x)}\n")
+        for s in range(0, len(x), chunk):
+            e = s + chunk
+            f.writelines("%d %d %.9g\n" % abc for abc in zip(x[s:e].tolist(), y[s:e].tolist(), z[s:e].tolist()))
+    return len(x)
+
+
 def run_infomap(
     infomap_bin: str,
     net_path: Path,
@@ -228,6 +336,16 @@ def main() -> int:
     ap.add_argument("--infomap-binary", default="infomap")
     ap.add_argument("--min-community-size", type=int, default=10)
     ap.add_argument("--density-subdirs", type=int, choices=(0, 1), default=1)
+    ap.add_argument(
+        "--graph-builder",
+        choices=("blockwise", "dense"),
+        default="blockwise",
+        help=(
+            "blockwise keeps only each node's strongest edges while computing FC in blocks; "
+            "dense builds the full node x node FC matrix (original behavior, much more memory and time)."
+        ),
+    )
+    ap.add_argument("--fc-block-cols", type=int, default=1000, help="Nodes per FC block for --graph-builder blockwise")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -281,7 +399,8 @@ def main() -> int:
         raise RuntimeError("Too few good vertices after structure/bad-vertex filtering.")
 
     # Subset distance to good vertices (avoid loading full .mat where possible).
-    Dg = load_distance_subset(d_path, good, n_gray)
+    blockwise = args.graph_builder == "blockwise"
+    Dg = load_distance_subset(d_path, good, n_gray, keep_integer_dtype=blockwise)
     good_sub = good >= n_cort
     if np.any(good_sub):
         Dg[np.ix_(good_sub, good_sub)] = 0.0
@@ -291,12 +410,19 @@ def main() -> int:
     sd = X.std(axis=1, keepdims=True)
     sd[sd == 0] = 1
     X = X / sd
-    fc = (X @ X.T) / max(t - 1, 1)
-    np.fill_diagonal(fc, 0.0)
-    fc[Dg <= float(args.min_distance)] = 0.0
-    np.nan_to_num(fc, copy=False)
+    n_nodes = X.shape[0]
+    if blockwise:
+        k_max = int(np.ceil(n_nodes * max(densities)))
+        top_idx, top_val, active = top_edges_blockwise(
+            X, Dg, float(args.min_distance), t, k_max, int(args.fc_block_cols)
+        )
+        del Dg
+    else:
+        fc = (X @ X.T) / max(t - 1, 1)
+        np.fill_diagonal(fc, 0.0)
+        fc[Dg <= float(args.min_distance)] = 0.0
+        np.nan_to_num(fc, copy=False)
 
-    n_nodes = fc.shape[0]
     out_membership = np.zeros((n_gray, len(densities)), dtype=np.float32)
 
     net_paths: List[Path] = []
@@ -312,8 +438,11 @@ def main() -> int:
         clu_path = density_dir / f"Bipartite_Density{dstr}.clu"
         log_path = density_dir / f"Bipartite_Density{dstr}_LogFile_{ts}.txt"
 
-        conn = build_connection_matrix(fc, float(dens))
-        n_edges = write_pajek(net_path, fc, conn)
+        if blockwise:
+            n_edges = write_pajek_edges(net_path, n_nodes, *edges_from_top(top_idx, top_val, active, float(dens)))
+        else:
+            conn = build_connection_matrix(fc, float(dens))
+            n_edges = write_pajek(net_path, fc, conn)
         print(f"[pfm_infomap] density={dstr} nodes={n_nodes} edges={n_edges}")
 
         net_paths.append(net_path)
