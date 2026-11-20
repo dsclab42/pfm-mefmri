@@ -346,7 +346,7 @@ if [[ "${PFM_RF_SUBCORT_REGRESS_ENABLE}" == "1" ]]; then
     --out-cifti "$PFM_INPUT_CIFTI_REG" \
     --left-surf "$L_MID" \
     --right-surf "$R_MID" \
-    --distance-mm "$PFM_RF_SUBCORT_REGRESS_DISTANCE_MM" "${regression_metadata[@]}"
+    --distance-mm "$PFM_RF_SUBCORT_REGRESS_DISTANCE_MM" ${regression_metadata[@]+"${regression_metadata[@]}"}
   PFM_INPUT_CIFTI="$PFM_INPUT_CIFTI_REG"
 fi
 
@@ -409,7 +409,7 @@ if [[ "$PFM_STRATEGY" == "ridgepfm" ]]; then
       --positive-fc-only "$PFM_RF_POSITIVE_FC_ONLY" --spatial-prior-transform "$PFM_RF_SPATIAL_PRIOR_TRANSFORM" \
       --local-exclusion-mm "$PFM_RF_LOCAL_EXCLUSION_MM" --brain-structures-csv "$PFM_RF_BRAIN_STRUCTURES_CSV" \
       --render "$PFM_RF_CV_RENDER" --keep-cache "$PFM_RF_CV_KEEP_CACHE" \
-      --outdir "$PFM_OUTDIR/$PFM_RF_CV_OUTDIR_NAME" "${cv_optional[@]}"
+      --outdir "$PFM_OUTDIR/$PFM_RF_CV_OUTDIR_NAME" ${cv_optional[@]+"${cv_optional[@]}"}
     PFM_RF_REQUESTED_LAMBDA="$PFM_RF_LAMBDA"
     PFM_RF_REQUESTED_SPATIAL_WEIGHT="$PFM_RF_SPATIAL_WEIGHT"
     cv_selected="$("$PFM_PYTHON" - "$PFM_OUTDIR/$PFM_RF_CV_OUTDIR_NAME/selected_parameters.json" <<'CVPY'
@@ -472,7 +472,7 @@ CVPY
     PFM_RF_VOLUME_ANATOMICAL_TARGET="${PFM_RF_VOLUME_ANATOMICAL_TARGET:-acpc}"
     PFM_RF_VOLUME_ACPC_REFERENCE="${PFM_RF_VOLUME_ACPC_REFERENCE:-${SubjectDir}/anat/T1w/T1w_acpc_dc_restore_brain.nii.gz}"
     volume_target_args=()
-    case "${PFM_RF_VOLUME_ANATOMICAL_TARGET,,}" in
+    case "$(printf '%s' "$PFM_RF_VOLUME_ANATOMICAL_TARGET" | tr '[:upper:]' '[:lower:]')" in
       acpc)
         PFM_RF_VOLUME_REFERENCE="${PFM_RF_VOLUME_REFERENCE:-$PFM_RF_VOLUME_ACPC_REFERENCE}"
         [[ "$PFM_RF_VOLUME_REFERENCE" == "$PFM_RF_VOLUME_ACPC_REFERENCE" ]] || { echo "ERROR: an ACPC volume target must use the ACPC ribbon-mapping reference"; exit 2; }
@@ -501,7 +501,7 @@ CVPY
       volume_name="$(basename "$map")"; volume_name="${volume_name%.nii}"; volume_name="${volume_name%.*}"
       "$PFM_PYTHON" "$MEDIR/lib/pfm_ridge_volume.py" --cifti "$map" \
         --reference "$PFM_RF_VOLUME_ACPC_REFERENCE" --surface-dir "${SubjectDir}/anat/T1w/fsaverage_LR32k" \
-        --subject "$Subject" --output "$PFM_OUTDIR/Volume/${volume_name}.nii.gz" "${volume_target_args[@]}"
+        --subject "$Subject" --output "$PFM_OUTDIR/Volume/${volume_name}.nii.gz" ${volume_target_args[@]+"${volume_target_args[@]}"}
     done
   fi
 
@@ -630,7 +630,7 @@ else
       fi
       "$PFM_PYTHON" "$MEDIR/lib/pfm_infomap_manual_labels.py" \
         --communities-cifti "${PFM_OUTDIR}/Bipartite_PhysicalCommunities.dtseries.nii" \
-        "${MANUAL_ARGS[@]}" \
+        ${MANUAL_ARGS[@]+"${MANUAL_ARGS[@]}"} \
         --priors-mat "$PFM_PRIORS_MAT" \
         --outdir "$PFM_OUTDIR" \
         --outfile-prefix "$PFM_INFOMAP_MANUAL_LABEL_OUTFILE" \
